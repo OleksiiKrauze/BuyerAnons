@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  buyer-anons:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: buyer-anons-dev
+    volumes:
+      - ./src:/app/src:rw
+      - ./tests:/app/tests:rw
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"  # Для webhook Viber
+    restart: unless-stopped
+    # Для разработки - держим контейнер запущенным
+    stdin_open: true
+    tty: true
+    command: ["python", "-m", "src.main"]

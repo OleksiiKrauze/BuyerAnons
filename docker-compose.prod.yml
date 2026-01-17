@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  buyer-anons:
+    image: buyer-anons:latest
+    container_name: buyer-anons-prod
+    env_file:
+      - .env.prod
+    ports:
+      - "8080:8080"
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

@@ -1,0 +1,29 @@
+# Web scraping
+playwright==1.40.0
+playwright-stealth==1.0.6
+beautifulsoup4==4.12.2
+
+# HTTP client
+aiohttp==3.9.1
+httpx==0.25.2
+
+# Environment and config
+python-dotenv==1.0.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+
+# Translation
+deepl==1.16.1
+
+# Link shortening
+pyshorteners==1.0.1
+
+# Viber bot
+viberbot==1.0.12
+
+# Web framework for webhook
+fastapi==0.104.1
+uvicorn==0.24.0
+
+# Utils
+loguru==0.7.2
