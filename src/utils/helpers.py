@@ -85,12 +85,15 @@ def detect_currency(url: str) -> str:
     """
     url_lower = url.lower()
 
-    # ASDA/George — всегда GBP
+    # ASDA/George: международная версия (global.direct.asda.com, открывается
+    # для не-британских IP) показывает цены в EUR, британская — в GBP
+    if "global.direct.asda.com" in url_lower:
+        return "EUR"
     if "asda.com" in url_lower or "george.com" in url_lower:
         return "GBP"
 
-    # DKNY (dkny.com) — американский магазин, цены в USD
-    if "dkny.com" in url_lower:
+    # DKNY и Joe's New Balance Outlet — американские магазины, цены в USD
+    if "dkny.com" in url_lower or "joesnewbalanceoutlet.com" in url_lower:
         return "USD"
 
     # Ищем паттерн /XX/ где XX — код страны

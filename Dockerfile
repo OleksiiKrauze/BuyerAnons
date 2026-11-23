@@ -9,6 +9,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright browsers (chromium for general, firefox for New Balance)
 RUN playwright install chromium firefox
 
+# Google Chrome for George / New Balance (real Chrome passes bot protection better).
+# Google Chrome has no Linux ARM build - on ARM the bundled Playwright Chromium is used instead.
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then playwright install chrome; fi
+
 # Copy source code
 COPY src/ ./src/
 COPY test_api.py ./

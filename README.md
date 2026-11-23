@@ -68,7 +68,29 @@ DEFAULT_MIN_DISCOUNT=30
 LOG_LEVEL=INFO
 ```
 
-### 3. Запуск через Docker
+### 3. Запуск у Windows (основний спосіб)
+
+Лише так працюють усі магазини: Joe's New Balance блокує Chrome у Docker.
+Потрібні Python 3.12, `pip install -r requirements.txt` і встановлений Google Chrome.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File start_bot.ps1
+```
+
+- Не запускає другий екземпляр (інакше Telegram видає Conflict на getUpdates)
+- Якщо бот впав — перезапускає через 30 с (`bot_restarts.log`)
+- Логи: `bot_error.log`, попередній запуск — `bot_error.prev.log`
+- Автозавантаження: задача Планувальника «BuyerAnons Bot» (при вході в Windows, із затримкою 1 хв).
+  Під час сканування George / New Balance на екрані відкривається вікно Chrome — так і має бути.
+
+Зупинити бота: завершити задачу та процес `python run_bot.py`:
+
+```powershell
+Stop-ScheduledTask 'BuyerAnons Bot'
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? CommandLine -like '*run_bot.py*' | % { Stop-Process -Id $_.ProcessId }
+```
+
+### 3а. Запуск через Docker (без New Balance)
 
 ```bash
 # Збірка та запуск
@@ -130,10 +152,15 @@ docker-compose down
 - ✅ Ціни та знижки (oldPrice)
 - ⚠️ Розміри недоступні в API категорій
 
-### ASDA/George (direct.asda.com)
+### ASDA (direct.asda.com)
 - ✅ Algolia API для пошуку
-- ⚠️ Браузерний скрапінг блокується Cloudflare
 - ⚠️ Знижки не завжди доступні в API
+
+### George (direct.asda.com/george/...)
+- ✅ Справжній Chrome через CDP (`src/scrapers/chrome_cdp.py`), працює і в Windows, і в Docker
+- ⚠️ Для не-британських IP сайт перенаправляє на міжнародну версію `global.direct.asda.com` (ціни в EUR),
+  британські посилання на розпродаж губляться — надсилайте посилання з міжнародної версії, напр.
+  `https://global.direct.asda.com/george/offers/all-products/D56M1G1,default,sc.html`
 
 ### DKNY (dkny.com)
 - ✅ Shopify JSON API (`/collections/<розділ>/products.json`), без браузера
@@ -143,10 +170,10 @@ docker-compose down
 - 💡 Ринок США (USD) зафіксовано cookie `localization=US` — інакше Shopify визначає країну за IP і віддає ціни без знижок
 
 ### Joe's New Balance Outlet (joesnewbalanceoutlet.com)
-- ✅ Підтримує парсинг через Playwright Firefox
-- ✅ Ціни, знижки, фото товарів
-- ⚠️ **Блокується з серверних IP** (PerimeterX захист)
-- ⚠️ Працює тільки з резидентними IP або проксі
+- ✅ Справжній Chrome через CDP, ціни, знижки, фото товарів
+- ✅ Посилання на розділ, напр. `https://www.joesnewbalanceoutlet.com/women/deals/extra-40-off-select-shoes/`
+- ⚠️ **Працює лише при запуску бота напряму у Windows** (`python run_bot.py`) з домашнього IP
+- ⚠️ У Docker (Linux Chrome) антибот блокує запит навіть з домашнього IP; з серверних IP — блокує завжди
 - 💡 Для хмарного деплою потрібен residential proxy
 
 ## Технічні деталі
@@ -263,8 +290,9 @@ scrapers = {
 | Компонент | Статус |
 |-----------|--------|
 | Zara скрапер | ✅ Готово |
-| ASDA/George API | ✅ Готово |
-| Joe's New Balance | ⚠️ Готово (потребує residential proxy) |
+| ASDA API | ✅ Готово |
+| George | ✅ Готово (міжнародна версія, EUR) |
+| Joe's New Balance | ⚠️ Лише запуск у Windows (у Docker блокується) |
 | DKNY | ✅ Готово |
 | DeepL переклад | ✅ Готово |
 | Telegram бот | ✅ Готово |

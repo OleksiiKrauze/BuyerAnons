@@ -24,7 +24,8 @@ class Product:
         """Рассчитать процент скидки."""
         if self.original_price <= 0:
             return 0
-        return int((1 - self.sale_price / self.original_price) * 100)
+        # round, а не int: 12/15 даёт 19.999…, а скидка на самом деле 20%
+        return round((1 - self.sale_price / self.original_price) * 100)
 
     @property
     def savings(self) -> float:

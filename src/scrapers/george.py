@@ -5,13 +5,12 @@ Uses Chrome DevTools Protocol to connect to a real Chrome browser,
 which bypasses bot detection better than Playwright's Chromium.
 """
 import asyncio
-import subprocess
-import os
 from typing import Optional
+from urllib.parse import urlparse
 from loguru import logger
-from playwright.async_api import async_playwright, Browser
 
 from .base import BaseScraper
+from .chrome_cdp import ChromeCDP
 from ..models import Product
 
 
@@ -23,13 +22,6 @@ class GeorgeScraper(BaseScraper):
     BASE_URL = "https://direct.asda.com"
     CDP_PORT = 9223  # Different port from New Balance
 
-    CHROME_PATHS = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        r"/usr/bin/google-chrome",
-        r"/usr/bin/chromium-browser",
-    ]
-
     @classmethod
     def can_handle(cls, url: str) -> bool:
         """Check if this scraper can handle the URL - specifically for George pages."""
@@ -38,85 +30,7 @@ class GeorgeScraper(BaseScraper):
 
     def __init__(self):
         super().__init__()
-        self._chrome_process: Optional[subprocess.Popen] = None
-        self._playwright = None
-        self._browser: Optional[Browser] = None
-
-    def _find_chrome(self) -> Optional[str]:
-        """Find Chrome executable."""
-        for path in self.CHROME_PATHS:
-            if os.path.exists(path):
-                return path
-        return None
-
-    async def _start_chrome(self):
-        """Start Chrome with remote debugging using isolated profile."""
-        chrome_path = self._find_chrome()
-        if not chrome_path:
-            logger.error("Chrome not found. Please install Google Chrome.")
-            return False
-
-        # Use a completely isolated profile directory for scraping
-        profile_dir = r"C:\temp\chrome_george_bot"
-
-        # Ensure directory exists
-        os.makedirs(profile_dir, exist_ok=True)
-
-        logger.info(f"Starting Chrome for George on port {self.CDP_PORT}...")
-        self._chrome_process = subprocess.Popen([
-            chrome_path,
-            f"--remote-debugging-port={self.CDP_PORT}",
-            f"--user-data-dir={profile_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-popup-blocking",
-            "--disable-sync",
-            "--disable-extensions",
-            "--disable-background-networking",
-            "--disable-client-side-phishing-detection",
-            "--profile-directory=Default",
-            "about:blank"
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        await asyncio.sleep(3)
-        return True
-
-    async def _get_browser(self):
-        """Get fresh browser connection via CDP."""
-        # Always clean up old connection first
-        await self._cleanup_browser()
-
-        # Start Chrome and connect
-        if not await self._start_chrome():
-            return None
-
-        self._playwright = await async_playwright().start()
-        try:
-            self._browser = await self._playwright.chromium.connect_over_cdp(
-                f"http://localhost:{self.CDP_PORT}"
-            )
-            logger.info("Connected to Chrome via CDP for George")
-        except Exception as e:
-            logger.error(f"Failed to connect to Chrome CDP: {e}")
-            return None
-
-        return self._browser
-
-    async def _cleanup_browser(self):
-        """Clean up browser connection."""
-        if self._browser:
-            try:
-                await self._browser.close()
-            except:
-                pass
-            self._browser = None
-
-        if self._playwright:
-            try:
-                await self._playwright.stop()
-            except:
-                pass
-            self._playwright = None
+        self._chrome = ChromeCDP("george", self.CDP_PORT)
 
     async def scrape(
         self,
@@ -165,7 +79,7 @@ class GeorgeScraper(BaseScraper):
         products = []
 
         try:
-            browser = await self._get_browser()
+            browser = await self._chrome.get_browser()
             if not browser:
                 logger.error("Could not get browser. Is Chrome installed?")
                 return []
@@ -204,17 +118,21 @@ class GeorgeScraper(BaseScraper):
                             const priceContainer = card.querySelector('[class*="price"], .mini-product-info');
                             let nowPrice = 0;
                             let wasPrice = 0;
+                            let currency = '';
 
                             if (priceContainer) {
                                 const text = priceContainer.textContent;
-                                const prices = text.match(/[\u00a3$]([\d.]+)/g) || [];
+                                // \u00a3 \u2014 \u0431\u0440\u0438\u0442\u0430\u043d\u0441\u043a\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f, \u20ac \u2014 \u043c\u0435\u0436\u0434\u0443\u043d\u0430\u0440\u043e\u0434\u043d\u0430\u044f (global.direct.asda.com)
+                                const prices = [...text.matchAll(/([\u00a3$\u20ac])\s?(\d+(?:[.,]\d{1,2})?)/g)];
+                                const num = m => parseFloat(m[2].replace(',', '.'));
                                 if (prices.length >= 2) {
-                                    nowPrice = parseFloat(prices[0].replace(/[\u00a3$]/g, ''));
-                                    wasPrice = parseFloat(prices[1].replace(/[\u00a3$]/g, ''));
+                                    nowPrice = num(prices[0]);
+                                    wasPrice = num(prices[1]);
                                 } else if (prices.length === 1) {
-                                    nowPrice = parseFloat(prices[0].replace(/[\u00a3$]/g, ''));
+                                    nowPrice = num(prices[0]);
                                     wasPrice = nowPrice;
                                 }
+                                if (prices.length) currency = prices[0][1];
                             }
 
                             const img = card.querySelector('img');
@@ -226,6 +144,7 @@ class GeorgeScraper(BaseScraper):
                                     name,
                                     nowPrice,
                                     wasPrice: wasPrice || nowPrice,
+                                    currency,
                                     image,
                                     link
                                 });
@@ -240,12 +159,15 @@ class GeorgeScraper(BaseScraper):
 
             await context.close()
 
+            # Относительные ссылки — от домена страницы (британская или международная версия)
+            site_url = f"https://{urlparse(url).netloc}" if urlparse(url).netloc else self.BASE_URL
+
             # Convert to Product objects
             for raw in raw_products:
                 if raw.get("nowPrice", 0) > 0:
                     product_url = raw.get("link", "")
                     if product_url and not product_url.startswith("http"):
-                        product_url = f"{self.BASE_URL}{product_url}"
+                        product_url = f"{site_url}{product_url}"
 
                     image_url = raw.get("image", "")
 
@@ -253,7 +175,7 @@ class GeorgeScraper(BaseScraper):
                         name=raw.get("name", "George Item"),
                         original_price=float(raw.get("wasPrice", 0)),
                         sale_price=float(raw.get("nowPrice", 0)),
-                        currency="GBP",
+                        currency={"€": "EUR", "$": "USD"}.get(raw.get("currency"), "GBP"),
                         image_url=image_url,
                         product_url=product_url,
                         available_sizes=[],
@@ -276,11 +198,4 @@ class GeorgeScraper(BaseScraper):
 
     async def close(self):
         """Close browser and Chrome process."""
-        await self._cleanup_browser()
-
-        if self._chrome_process:
-            try:
-                self._chrome_process.terminate()
-            except:
-                pass
-            self._chrome_process = None
+        await self._chrome.stop()
