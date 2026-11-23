@@ -8,7 +8,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException
 from loguru import logger
 import uvicorn
 
@@ -17,7 +17,7 @@ from .models import Product
 from .scrapers.browser import browser_manager
 from .services.translator import translator
 from .services.link_shortener import link_shortener
-from .services.viber_bot import viber_bot
+from .services.telegram_bot import telegram_bot
 from .utils import get_scraper, detect_store
 
 
@@ -29,21 +29,10 @@ class ScanOrchestrator:
         url: str,
         sizes: Optional[list[str]] = None,
         top_count: int = 10,
-        min_discount: int = 30,
+        min_discount: int = 0,
+        sort_mode: str = "discount",
+        max_price: Optional[float] = None,
     ) -> list[Product]:
-        """
-        Сканировать страницу и вернуть топ предложений.
-
-        Args:
-            url: URL страницы со скидками
-            sizes: Фильтр по размерам
-            top_count: Количество товаров
-            min_discount: Минимальная скидка
-
-        Returns:
-            Список товаров с переводами и короткими ссылками
-        """
-        # Определяем магазин и получаем скрапер
         store = detect_store(url)
         if not store:
             raise ValueError(f"Unsupported store: {url}")
@@ -55,7 +44,6 @@ class ScanOrchestrator:
         logger.info(f"Scanning {store}: {url}")
         logger.info(f"Filters: sizes={sizes}, top={top_count}, min_discount={min_discount}%")
 
-        # Запускаем скрапинг
         products = await scraper.scrape(
             url=url,
             sizes=sizes,
@@ -66,6 +54,17 @@ class ScanOrchestrator:
         if not products:
             logger.warning("No products found")
             return []
+
+        # Сортировка
+        if sort_mode == "price":
+            products.sort(key=lambda p: p.sale_price)
+        elif sort_mode == "value" and max_price is not None:
+            products = [p for p in products if p.sale_price <= max_price]
+            products.sort(key=lambda p: -p.discount_percent)
+        else:
+            products.sort(key=lambda p: -p.discount_percent)
+
+        products = products[:top_count]
 
         # Переводим описания
         if translator.is_available:
@@ -89,32 +88,24 @@ class ScanOrchestrator:
         return products
 
 
-# Создаём оркестратор
 orchestrator = ScanOrchestrator()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle manager для FastAPI."""
-    # Startup
     logger.info("Starting BuyerAnons service...")
     await browser_manager.start()
 
-    # Регистрируем обработчик сканирования для Viber бота
-    viber_bot.register_scan_handler(orchestrator.scan)
-
-    # Устанавливаем webhook если настроен
-    if settings.viber_webhook_url:
-        viber_bot.set_webhook(settings.viber_webhook_url)
+    telegram_bot.register_scan_handler(orchestrator.scan)
+    await telegram_bot.start_polling()
 
     yield
 
-    # Shutdown
     logger.info("Shutting down...")
+    await telegram_bot.close()
     await browser_manager.stop()
 
 
-# Создаём приложение FastAPI
 app = FastAPI(
     title="BuyerAnons",
     description="Сервис мониторинга скидок в интернет-магазинах",
@@ -125,60 +116,19 @@ app = FastAPI(
 
 @app.get("/")
 async def root():
-    """Health check."""
     return {"status": "ok", "service": "BuyerAnons"}
 
 
 @app.get("/health")
 async def health():
-    """Детальный health check."""
     return {
         "status": "ok",
         "services": {
-            "viber_bot": viber_bot.is_available,
+            "telegram_bot": telegram_bot.is_available,
             "translator": translator.is_available,
             "link_shortener": link_shortener.is_available,
         }
     }
-
-
-@app.post("/viber/webhook")
-async def viber_webhook(request: Request):
-    """
-    Webhook для Viber бота.
-
-    Viber отправляет сюда все события.
-    """
-    if not viber_bot.is_available:
-        raise HTTPException(status_code=503, detail="Viber bot not configured")
-
-    # Получаем данные запроса
-    signature = request.headers.get("X-Viber-Content-Signature", "")
-    body = await request.body()
-
-    # Проверяем подпись
-    if not viber_bot.verify_signature(body, signature):
-        raise HTTPException(status_code=403, detail="Invalid signature")
-
-    # Парсим запрос
-    data = await request.json()
-    viber_request = viber_bot.parse_request(data)
-
-    if viber_request is None:
-        return {"status": "ok"}
-
-    # Обрабатываем запрос
-    from viberbot.api.viber_requests import (
-        ViberMessageRequest,
-        ViberConversationStartedRequest,
-    )
-
-    if isinstance(viber_request, ViberMessageRequest):
-        await viber_bot.handle_message(viber_request)
-    elif isinstance(viber_request, ViberConversationStartedRequest):
-        await viber_bot.handle_conversation_started(viber_request)
-
-    return {"status": "ok"}
 
 
 @app.post("/api/scan")
@@ -186,13 +136,11 @@ async def api_scan(
     url: str,
     sizes: Optional[str] = None,
     top: int = 10,
-    min_discount: int = 30,
+    min_discount: int = 0,
+    sort: str = "discount",
+    max_price: Optional[float] = None,
 ):
-    """
-    API endpoint для сканирования.
-
-    Для тестирования без Viber.
-    """
+    """API endpoint для тестирования без Telegram."""
     size_list = sizes.split(",") if sizes else None
 
     try:
@@ -201,6 +149,8 @@ async def api_scan(
             sizes=size_list,
             top_count=top,
             min_discount=min_discount,
+            sort_mode=sort,
+            max_price=max_price,
         )
 
         return {
@@ -228,7 +178,6 @@ async def api_scan(
 
 
 def main():
-    """Точка входа."""
     logger.info(f"Starting server on {settings.host}:{settings.port}")
     uvicorn.run(
         "src.main:app",
